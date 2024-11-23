@@ -1,0 +1,13 @@
+/venv
+.env
+/audio_chunks
+/llm_outputs
+/models
+/recordings
+/resources
+/results
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
