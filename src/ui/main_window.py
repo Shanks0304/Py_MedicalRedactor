@@ -24,7 +24,9 @@ class MainWindow(QMainWindow):
         self.audio_recorder.transcription_complete.connect(
             self.llm_panel.set_input_text
         )
-        
+        self.audio_recorder.transcription_progress_message.connect(
+            self.llm_panel.log_message
+        )
         # Layout
         layout.addWidget(self.audio_recorder, stretch=1)
         layout.addWidget(self.llm_panel, stretch=2)

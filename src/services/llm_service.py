@@ -3,67 +3,178 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PyQt6.QtCore import QObject, pyqtSignal
 from dotenv import load_dotenv
-from langchain_core.prompts import PromptTemplate
 from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
-from langchain_community.llms.llamacpp import LlamaCpp
+from langchain_ollama import OllamaLLM
 from pydantic import BaseModel
 
+from utils.config import setup_logger
+
 load_dotenv()
+
+# def load_env():
+#     if getattr(sys, 'frozen', False):
+#         # Get key and decrypt env file
+#         key = [s[0] for s in sys._MEIPASS if s[2] == 'OPTION'][0]
+#         f = Fernet(key)
+        
+#         env_path = os.path.join(sys._MEIPASS, 'encrypted.env')
+#         with open(env_path, 'rb') as file:
+#             encrypted_data = file.read()
+            
+#         decrypted_data = f.decrypt(encrypted_data)
+#         # Load decrypted env data
+#         for line in decrypted_data.decode().split('\n'):
+#             if '=' in line:
+#                 key, value = line.split('=', 1)
+#                 os.environ[key.strip()] = value.strip()
+
+
+# Instead of including .env directly, you can encrypt sensitive data
+# import base64
+# import os
+# from cryptography.fernet import Fernet
+
+# def encrypt_env():
+#     key = Fernet.generate_key()
+#     f = Fernet(key)
+    
+#     with open('.env', 'rb') as file:
+#         env_data = file.read()
+    
+#     encrypted_data = f.encrypt(env_data)
+    
+#     with open('encrypted.env', 'wb') as file:
+#         file.write(encrypted_data)
+    
+#     return key
+
+# key = encrypt_env()
+
+# a = Analysis(
+#     ['src/main.py'],
+#     datas=[
+#         ('encrypted.env', '.'),  # Include encrypted env instead
+#     ],
+#     # ... rest of your config
+# )
+
+# # Add key to binary
+# a.scripts += [(key, '', 'OPTION')]
+
 class LLMService(QObject):
     response_ready = pyqtSignal(str)
+    debug_message = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
-        self.output_dir = Path("llm_outputs")
-        self.output_dir.mkdir(exist_ok=True)
+        if getattr(sys, 'frozen', False):
+        # If running from bundle
+            bundle_dir = os.path.dirname(sys.executable)
+            resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
+            dotenv_path = os.path.join(resources_dir, '.env')
+        else:
+            # If running from source
+            dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+        
+        self.logger = setup_logger(__name__)
+        self.logger.info("AudioService initialized")
+
+        print(f"Loading .env from: {dotenv_path}")
+        print(f"Exists: {os.path.exists(dotenv_path)}")
+        print(f"OPENAI_API_KEY set: {'OPENAI_API_KEY' in os.environ}")
+
+        self.logger.info(f"Loading .env from: {dotenv_path}")
+        self.logger.info(f"Exists: {os.path.exists(dotenv_path)}")
+        self.logger.info(f"OPENAI_API_KEY set: {'OPENAI_API_KEY' in os.environ}")
+
+        self.output_dir = os.path.join(os.path.expanduser('~/Documents'), 'medicalapp', 'llm_outputs')
+        os.makedirs(self.output_dir, exist_ok=True)
         self.template_doc = None
         self.template_structure = None
         self.current_response_doc = None
+        self.llm = None
 
-         # Initialize Llama model
-        try:
-            # Get the absolute path to the model
-            current_dir = Path(__file__).parent.parent.parent  # src directory
-            model_path = current_dir / "models" / "Llama-3.2-3B-Instruct-Q4_K_S.gguf"
-            
-            if not model_path.exists():
-                raise FileNotFoundError(f"Model file not found at: {model_path}")
+        
+        load_dotenv(dotenv_path)
 
-            callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
-            
-            self.llm = LlamaCpp(
-                model_path=str(model_path),
-                n_gpu_layers=0,
-                n_batch=1024,
-                verbose=False,  # Set to True for debugging
-                n_ctx=16348,
-                max_tokens=2048,
-                top_k=5,
-                temperature=0.0,
-                repeat_penalty=1.2,
-                seed=4826
-            )
-            print("LLM initialization successful")
-            
-        except Exception as e:
-            error_msg = f"Error initializing Llama model: {str(e)}"
-            print(error_msg)  # Debug print
-            self.error_occurred.emit(error_msg)
-            raise RuntimeError(error_msg)
+    def _load_llm(self):
+        # Initialize Llama model
+        if self.llm is None:
+            try:
+                print("Loading LLM model...")
+                self.debug_message.emit("Loading LLM model...")
+                callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
+                self.llm = OllamaLLM(
+                    model="llama3.2:3b",
+                    temperature=0.0,
+                    repeat_penalty=1.2,
+                    top_k=5,
+                    num_gpu=0,
+                    num_ctx=4098,
+                    verbose=True
+                )
+                print("LLM initialization successful")
+                self.debug_message.emit("LLM initialization successful")
+                
+            except Exception as e:
+                error_msg = f"Error initializing Llama model: {str(e)}"
+                print(error_msg)  # Debug print
+                self.error_occurred.emit(error_msg)
+                raise RuntimeError(error_msg)
+
+    def _unload_llm(self):
+        """Safely unload LLM model and clean up resources"""
+        if self.llm is not None:
+            try:
+                print("Unloading LLM model...")
+                self.debug_message.emit("Unloading LLM model...")
+                # Explicitly close any open resources
+                if hasattr(self.llm, 'client'):
+                    self.llm.client.close()
+                del self.llm
+                self.llm = None
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                # Clean up any remaining semaphores
+                try:
+                    from multiprocessing import resource_tracker
+                    resource_tracker.cleanup_resources()
+                except Exception as e:
+                    print(f"Resource cleanup warning: {e}")
+                    
+                print("LLM model unloaded successfully")
+                self.debug_message.emit("LLM model unloaded successfully")
+            except Exception as e:
+                print(f"Error during model cleanup: {e}")
 
     def set_template(self, template_path: str):
         """Load and analyze the template document"""
         try:
+            if not Path(template_path).exists():
+                raise FileNotFoundError(f"Template file not found: {template_path}")
+                
             self.template_doc = Document(template_path)
+            
+            # Validate template
+            if not self.template_doc.paragraphs:
+                raise ValueError("Template document is empty")
+                
             return True
+            
         except Exception as e:
-            self.error_occurred.emit(f"Error loading template: {str(e)}")
+            error_msg = f"Error loading template: {str(e)}"
+            print(error_msg)  # Debug print
+            self.error_occurred.emit(error_msg)
             return False
 
     def process_text(self, transcription: str):
@@ -75,13 +186,14 @@ class LLMService(QObject):
             if not self.template_doc:
                 raise ValueError("No template loaded")
 
-            if not self.llm:
-                raise RuntimeError("LLM chain not initialized")
+            self._load_llm()
             
             prompt = self.create_privacy_check_prompt(transcription=transcription)
-
+            print(prompt)
             privacy_result = self.llm.invoke(prompt)
+
             print(privacy_result)
+            self._unload_llm()
             
             updated_transcription = transcription
             
@@ -103,7 +215,6 @@ class LLMService(QObject):
                 self.error_occurred.emit(str(e) + '\n\nPlease try again.')
                 return None
 
-
             for key, value in patient_data.items():
                 # Create a regex pattern to match the exact value in the response text
                 value = str(value)
@@ -113,16 +224,17 @@ class LLMService(QObject):
                     updated_transcription = re.sub(pattern, f'{{{key}}}', updated_transcription)
 
             print(updated_transcription)
+            self.debug_message.emit(updated_transcription)
 
             sample_note = '\n'.join([paragraph.text for paragraph in self.template_doc.paragraphs])
             import openai
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a bot that rewrites medical consultation notes using provided interview transcripts, ensuring the use of implicit labels for personally identifiable information."},
+                    {"role": "system", "content": "You are a bot that rewrites medical consultation notes using provided interview transcripts, ensuring the use of {name}, {age}, {date_of_birth}, {email}, {phone_number}."},
                     {"role": "user", "content":
                         f"""
-                        Here is the original consultation note:
+                        Here is the original consultation note template:
                         {sample_note}
 
                         Please rewrite this consultation note using the following interview transcription:
@@ -130,7 +242,9 @@ class LLMService(QObject):
                         + """
                         Important:
 
-                        Use the implicit labels in curly braces for all the available patient's personal identifiable information on new note: {name}, {age}, {date_of_birth}, {email}, {phone_number}.
+                        Find all the available and possible patient's name, age, email, phone number and date of birth.
+
+                        Replace them with {name}, {age}, {date_of_birth}, {email}, {phone_number} on new note.
 
                         Don't use any additional or creative labels except for {name}, {age}, {date_of_birth}, {email}, {phone_number}.
 
@@ -154,6 +268,8 @@ class LLMService(QObject):
         except Exception as e:
             self.error_occurred.emit(str(e))
             return None
+        finally:
+            self._unload_llm()
 
     def save_response(self, response_context: str) -> str:
         """
@@ -170,9 +286,8 @@ class LLMService(QObject):
                 raise ValueError("No content to save")
 
             # Get project root directory and create results folder
-            project_root = Path(__file__).parent.parent.parent  # Go up to project root
-            results_dir = project_root / "results"
-            results_dir.mkdir(exist_ok=True)
+            results_dir = os.path.join(os.path.expanduser('~/Documents'), 'medicalapp', 'results') # Go up to project root
+            os.makedirs(results_dir, exist_ok=True)
 
             # Create new document and add content
             doc = Document()
@@ -232,6 +347,9 @@ class LLMService(QObject):
         # Use re.sub with the replacement_function to replace all patterns
         return re.sub(pattern, replacement_function, text)
 
+    def __del__(self):
+        """Destructor to ensure cleanup"""
+        self._unload_llm()
 class PrivacyCheck(BaseModel):
     name: str
     email: str

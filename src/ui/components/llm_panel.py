@@ -6,7 +6,8 @@ from PyQt6.QtWidgets import (
     QLabel, 
     QTextEdit,
     QFileDialog,
-    QMessageBox
+    QMessageBox,
+    QPlainTextEdit
 )
 from PyQt6.QtCore import pyqtSignal
 from services.llm_service import LLMService
@@ -36,16 +37,16 @@ class LLMPanel(QWidget):
         layout.addLayout(template_layout)
         
         # Input section
-        input_label = QLabel("Transcription:")
+        self.input_label = QLabel("Transcription:")
         self.input_text = QTextEdit()
         self.input_text.setPlaceholderText("Transcription will appear here...")
         self.input_text.setReadOnly(False)
-        layout.addWidget(input_label)
+        layout.addWidget(self.input_label)
         layout.addWidget(self.input_text)
         
         # Process button
         self.process_button = QPushButton("Process with LLM")
-        self.process_button.setEnabled(False)  # Enabled when transcription is available
+        self.process_button.setEnabled(True)  # Enabled when transcription is available
         layout.addWidget(self.process_button)
         
         # Response section
@@ -55,6 +56,14 @@ class LLMPanel(QWidget):
         layout.addWidget(response_label)
         layout.addWidget(self.response_text)
         
+        # Add log display section
+        log_label = QLabel("Processing Logs:")
+        self.log_display = QPlainTextEdit()
+        self.log_display.setReadOnly(True)
+        self.log_display.setMaximumHeight(150)  # Limit height
+        layout.addWidget(log_label)
+        layout.addWidget(self.log_display)
+
         # Export button
         self.export_button = QPushButton("Export Response")
         self.export_button.setEnabled(False)  # Enabled when response is available
@@ -68,8 +77,17 @@ class LLMPanel(QWidget):
         
         # Connect LLM service signals
         self.llm_service.response_ready.connect(self.handle_llm_response)
+        self.llm_service.debug_message.connect(self.log_message)
         self.llm_service.error_occurred.connect(self.handle_error)
 
+    def log_message(self, message: str):
+        """Add a new log message to the display"""
+        self.log_display.appendPlainText(message)
+        # Auto-scroll to bottom
+        self.log_display.verticalScrollBar().setValue(
+            self.log_display.verticalScrollBar().maximum()
+        )
+    
     def load_template(self):
         file_name, _ = QFileDialog.getOpenFileName(
             self,

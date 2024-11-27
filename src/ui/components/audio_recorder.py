@@ -10,6 +10,7 @@ class AudioRecorderWidget(QWidget):
     file_selected = pyqtSignal(str)
     transcription_chunk_ready = pyqtSignal(str)  # For live updates
     transcription_complete = pyqtSignal(str)     # For final transcript
+    transcription_progress_message = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -28,6 +29,9 @@ class AudioRecorderWidget(QWidget):
         )
         self.audio_service.recording_saved.connect(
             self.handle_recording_saved
+        )
+        self.transcription_service.progress_message.connect(
+            self.handle_transcripton_process
         )
             
     def setup_ui(self):
@@ -129,6 +133,9 @@ class AudioRecorderWidget(QWidget):
     def handle_transcription(self, text: str):
         self.transcription_chunk_ready.emit(text)
 
+    def handle_transcripton_process(self, text:str):
+        self.transcription_progress_message.emit(text)
+
     def handle_recording_saved(self, filepath: str):
         self.current_file = filepath
         self.file_label.setText(f"Saved: {Path(filepath).name}")
@@ -151,7 +158,7 @@ class AudioRecorderWidget(QWidget):
             self.file_label.setText(f"Selected file: {Path(file_path).name}")
             self.file_selected.emit(file_path)
 
-             # Load and process the audio file
+        # Load and process the audio file
         audio_data = self.audio_service.load_audio_file(file_path)
         if audio_data is not None:
             self.file_label.setText(f"Processing: {Path(file_path).name}")
