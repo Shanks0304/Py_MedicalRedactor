@@ -32,6 +32,18 @@ class LLMPanel(QWidget):
         template_layout = QHBoxLayout()
         self.template_status = QLabel("No template loaded")
         self.template_button = QPushButton("Load Template")
+        self.template_button.setStyleSheet("""
+            QPushButton {
+                padding: 8px 16px;
+                background-color: palette(button);
+                color: palette(buttonText);
+                border: 1px solid palette(mid);
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: palette(light);
+            }
+        """)
         template_layout.addWidget(self.template_status)
         template_layout.addWidget(self.template_button)
         layout.addLayout(template_layout)
@@ -41,6 +53,15 @@ class LLMPanel(QWidget):
         self.input_text = QTextEdit()
         self.input_text.setPlaceholderText("Transcription will appear here...")
         self.input_text.setReadOnly(False)
+        self.input_text.setStyleSheet("""
+            QTextEdit {
+                background-color: palette(base);
+                color: palette(text);
+                border: 1px solid palette(mid);
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
         layout.addWidget(self.input_label)
         layout.addWidget(self.input_text)
         
@@ -53,6 +74,15 @@ class LLMPanel(QWidget):
         response_label = QLabel("LLM Response:")
         self.response_text = QTextEdit()
         self.response_text.setReadOnly(True)
+        self.response_text.setStyleSheet("""
+            QTextEdit {
+                background-color: palette(base);
+                color: palette(text);
+                border: 1px solid palette(mid);
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
         layout.addWidget(response_label)
         layout.addWidget(self.response_text)
         
@@ -61,6 +91,15 @@ class LLMPanel(QWidget):
         self.log_display = QPlainTextEdit()
         self.log_display.setReadOnly(True)
         self.log_display.setMaximumHeight(150)  # Limit height
+        self.log_display.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: palette(base);
+                color: palette(text);
+                border: 1px solid palette(mid);
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
         layout.addWidget(log_label)
         layout.addWidget(self.log_display)
 

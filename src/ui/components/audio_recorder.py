@@ -47,7 +47,7 @@ class AudioRecorderWidget(QWidget):
         self.status_label = QLabel("Ready to record")
         self.status_label.setStyleSheet("""
             QLabel {
-                color: #666;
+                color: palette(text);
                 font-size: 14px;
                 margin: 10px 0;
             }
@@ -59,10 +59,10 @@ class AudioRecorderWidget(QWidget):
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.file_label.setStyleSheet("""
             QLabel {
-                color: #333;
+                color: palette(text);
                 font-size: 12px;
                 padding: 15px;
-                background-color: #f5f5f5;
+                background-color: palette(alternateBase);
                 border-radius: 4px;
                 margin: 5px 0;
                 min-width: 200px;
@@ -76,18 +76,18 @@ class AudioRecorderWidget(QWidget):
         self.select_file_button.setStyleSheet("""
             QPushButton {
                 padding: 10px 20px;
-                background-color: #f0f0f0;
-                border: none;
+                background-color: palette(button);
+                color: palette(buttonText);
+                border: 1px solid palette(mid);
                 border-radius: 4px;
-                color: #333;
                 font-size: 13px;
                 min-width: 200px;
             }
             QPushButton:hover {
-                background-color: #e0e0e0;
+                background-color: palette(light);
             }
             QPushButton:pressed {
-                background-color: #d0d0d0;
+                background-color: palette(dark);
             }
         """)
         self.select_file_button.clicked.connect(self.select_recording)
@@ -195,13 +195,10 @@ class RecordButton(QPushButton):
             QPushButton {
                 border-radius: 40px;
                 border: 3px solid #ff4444;
-                background-color: white;
+                background-color: palette(base);
             }
             QPushButton:hover {
-                background-color: #ffeeee;
-            }
-            QPushButton:pressed {
-                background-color: #ffe0e0;
+                background-color: palette(alternateBase);
             }
         """)
         
@@ -216,9 +213,6 @@ class RecordButton(QPushButton):
                 }
                 QPushButton:hover {
                     background-color: #ff6666;
-                }
-                QPushButton:pressed {
-                    background-color: #ff8888;
                 }
             """)
         else:

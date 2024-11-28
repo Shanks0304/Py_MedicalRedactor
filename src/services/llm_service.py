@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
 from langchain_ollama import OllamaLLM
 from pydantic import BaseModel
+import multiprocessing
 
 from utils.config import setup_logger
 
@@ -74,6 +75,14 @@ class LLMService(QObject):
 
     def __init__(self):
         super().__init__()
+
+        # Add this to prevent multiprocessing issues
+        if hasattr(multiprocessing, 'set_start_method'):
+            try:
+                multiprocessing.set_start_method('spawn', force=True)
+            except RuntimeError:
+                pass
+
         if getattr(sys, 'frozen', False):
         # If running from bundle
             bundle_dir = os.path.dirname(sys.executable)
@@ -84,11 +93,6 @@ class LLMService(QObject):
             dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
         
         self.logger = setup_logger(__name__)
-        self.logger.info("AudioService initialized")
-
-        print(f"Loading .env from: {dotenv_path}")
-        print(f"Exists: {os.path.exists(dotenv_path)}")
-        print(f"OPENAI_API_KEY set: {'OPENAI_API_KEY' in os.environ}")
 
         self.logger.info(f"Loading .env from: {dotenv_path}")
         self.logger.info(f"Exists: {os.path.exists(dotenv_path)}")
@@ -108,11 +112,10 @@ class LLMService(QObject):
         # Initialize Llama model
         if self.llm is None:
             try:
-                print("Loading LLM model...")
                 self.debug_message.emit("Loading LLM model...")
                 callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
                 self.llm = OllamaLLM(
-                    model="llama3.2:3b",
+                    model="llama3.2:1b",
                     temperature=0.0,
                     repeat_penalty=1.2,
                     top_k=5,
@@ -120,12 +123,12 @@ class LLMService(QObject):
                     num_ctx=4098,
                     verbose=True
                 )
-                print("LLM initialization successful")
                 self.debug_message.emit("LLM initialization successful")
+                self.logger.info("LLM initialization successful")
                 
             except Exception as e:
                 error_msg = f"Error initializing Llama model: {str(e)}"
-                print(error_msg)  # Debug print
+                self.logger.error(error_msg)  # Debug print
                 self.error_occurred.emit(error_msg)
                 raise RuntimeError(error_msg)
 
@@ -133,8 +136,8 @@ class LLMService(QObject):
         """Safely unload LLM model and clean up resources"""
         if self.llm is not None:
             try:
-                print("Unloading LLM model...")
-                self.debug_message.emit("Unloading LLM model...")
+                self.debug_message.emit("Unloading LLM ...")
+                self.logger.debug("Unloading LLM ...")
                 # Explicitly close any open resources
                 if hasattr(self.llm, 'client'):
                     self.llm.client.close()
@@ -148,14 +151,14 @@ class LLMService(QObject):
                 # Clean up any remaining semaphores
                 try:
                     from multiprocessing import resource_tracker
-                    resource_tracker.cleanup_resources()
+                    resource_tracker._resource_tracker = None
                 except Exception as e:
-                    print(f"Resource cleanup warning: {e}")
+                    self.logger.error(f"Resource cleanup warning: {e}")
                     
-                print("LLM model unloaded successfully")
-                self.debug_message.emit("LLM model unloaded successfully")
+                self.logger.debug("LLM unloaded successfully")
+                self.debug_message.emit("LLM unloaded successfully")
             except Exception as e:
-                print(f"Error during model cleanup: {e}")
+                self.logger.error(f"Error during model cleanup: {e}")
 
     def set_template(self, template_path: str):
         """Load and analyze the template document"""
@@ -173,7 +176,7 @@ class LLMService(QObject):
             
         except Exception as e:
             error_msg = f"Error loading template: {str(e)}"
-            print(error_msg)  # Debug print
+            self.logger.error(error_msg)  # Debug print
             self.error_occurred.emit(error_msg)
             return False
 
@@ -189,10 +192,9 @@ class LLMService(QObject):
             self._load_llm()
             
             prompt = self.create_privacy_check_prompt(transcription=transcription)
-            print(prompt)
+            self.logger.info("Prompt: " + "\n" + prompt)
             privacy_result = self.llm.invoke(prompt)
-
-            print(privacy_result)
+            self.logger.info("\n" + privacy_result)
             self._unload_llm()
             
             updated_transcription = transcription
@@ -204,14 +206,13 @@ class LLMService(QObject):
 
             # Step 2: Extract the JSON string  
             json_string = privacy_result[start_index:end_index]  
-            print(json_string)
+            self.logger.info("privacy result: ", json_string)
 
             # Step 3: Parse the JSON string into a Python dictionary  
             try:  
                 patient_data = json.loads(json_string)  
-                print(patient_data)  # Working with the extracted data  
             except json.JSONDecodeError as e:  
-                print("Error decoding JSON:", e)
+                self.logger.error("Error decoding JSON:", e)
                 self.error_occurred.emit(str(e) + '\n\nPlease try again.')
                 return None
 
@@ -223,44 +224,80 @@ class LLMService(QObject):
                         pattern = re.escape(value)  # Escape special characters in the value
                     updated_transcription = re.sub(pattern, f'{{{key}}}', updated_transcription)
 
-            print(updated_transcription)
-            self.debug_message.emit(updated_transcription)
+            self.logger.info(updated_transcription)
 
             sample_note = '\n'.join([paragraph.text for paragraph in self.template_doc.paragraphs])
             import openai
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a bot that rewrites medical consultation notes using provided interview transcripts, ensuring the use of {name}, {age}, {date_of_birth}, {email}, {phone_number}."},
-                    {"role": "user", "content":
-                        f"""
+                # messages=[
+                #     {"role": "system", "content": "You are a bot that rewrites medical consultation notes using provided interview transcripts, ensuring the use of {name}, {age}, {date_of_birth}, {email}, {phone_number}."},
+                #     {"role": "user", "content":
+                #         f"""
+                #         Here is the original consultation note template:
+                #         {sample_note}
+
+                #         Please rewrite this consultation note using the following interview transcription:
+                #         {updated_transcription}"""
+                #         + """
+                #         Important:
+
+                #         Find all the available and possible patient's name, age, email, phone number and date of birth.
+
+                #         Replace them with {name}, {age}, {date_of_birth}, {email}, {phone_number} on new note.
+
+                #         Don't use any additional or creative labels except for {name}, {age}, {date_of_birth}, {email}, {phone_number}.
+
+                #         Do not retain any previous PII from the sample note.
+
+                #         Retain the original structure of the consultation note and do not include any explanations, comments, or additional text.
+                #         """
+                #     }
+                # ]
+                messages = [
+                    {
+                        "role": "system", "content":
+                            """You are a professional medical documentation assistant specializing in rewriting consultation notes.
+                            Your role is to synthesize clinical interview transcripts into polished, human-like consultation notes that are comprehensive, detailed, and empathetic while adhering to a professional structure.
+                            Ensure that sensitive information like patient names, ages, and contact details are replaced with placeholders: {name}, {age}, {date_of_birth}, {email}, {phone_number}.
+                            Your notes should accurately reflect the patient’s symptoms, history, and context in a nuanced and relatable manner.
+                            """
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""
                         Here is the original consultation note template:
                         {sample_note}
 
+
+
                         Please rewrite this consultation note using the following interview transcription:
-                        {updated_transcription}"""
-                        + """
-                        Important:
+                        {updated_transcription}""" + 
 
-                        Find all the available and possible patient's name, age, email, phone number and date of birth.
 
-                        Replace them with {name}, {age}, {date_of_birth}, {email}, {phone_number} on new note.
-
-                        Don't use any additional or creative labels except for {name}, {age}, {date_of_birth}, {email}, {phone_number}.
-
-                        Do not retain any previous PII from the sample note.
-
-                        Retain the original structure of the consultation note and do not include any explanations, comments, or additional text.
                         """
+                        Important:
+                        1. Retain the structure of the provided consultation note template, including all sections and subheadings.
+                        2. Ensure that all details mentioned in the transcription (e.g., demographic information, symptoms, history) are incorporated accurately into the rewritten note. Avoid omitting any relevant information unless it is not present in the transcription.
+                        3. Describe the patient’s symptoms in a human-like and relatable manner. For example:
+                        - Instead of stating "The patient reports a long-standing low mood," elaborate with, "The patient shared that their mood has felt persistently low, describing it as a constant ‘cloud’ that dampens their day-to-day experiences."
+                        - Include the patient's own words, where appropriate, to make the note more vivid.
+                        4. Provide clear and professional clinical reasoning in sections like ‘Impression’ and ‘Plan,’ integrating the patient’s history and symptoms into the assessment.
+                        5. Avoid over-reliance on placeholders (e.g., {name}) when the same placeholder is repeatedly used within the same section. Use pronouns appropriately for natural readability.
+                        6. Do not simply copy and paste verbatim from the provided template or transcript. Rewrite to ensure the note feels cohesive and thoughtfully composed.
+                        7. Avoid clinical jargon unless absolutely necessary, opting for plain, professional language that is accessible and clear.
+
+
+
+                        The rewritten note should present as a polished, nuanced, and complete consultation note, avoiding redundancy or omissions. It should read as though written by a highly experienced and empathetic clinician."""
                     }
                 ]
             )
             
             new_note = response.choices[0].message.content
-            print(new_note)
+            self.logger.info("\n" + new_note)
 
             new_note = self.replace_pii_with_labels(new_note, patient_data)
-            print(new_note)
 
             self.response_ready.emit(new_note)
             return new_note
@@ -300,12 +337,12 @@ class LLMService(QObject):
 
             # Save the document
             doc.save(str(output_path))
-            print(f"Document saved successfully at: {output_path}")
+            self.logger.info(f"Document saved successfully at: {output_path}")
             return str(output_path)
 
         except Exception as e:
             error_msg = f"Error saving response: {str(e)}"
-            print(error_msg)  # Debug print
+            self.logger.error(error_msg)  # Debug print
             self.error_occurred.emit(error_msg)
             return None
 

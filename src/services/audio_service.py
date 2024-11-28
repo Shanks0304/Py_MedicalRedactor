@@ -200,7 +200,7 @@ class AudioService(QObject):
                 self.file_loaded.emit(audio_data)
                 return audio_data
             else:
-                print("There is no audio file")
+                self.logger.error("There is no audio file")
                 return None
         except Exception as e:
             self.error_occurred.emit(f"Failed to load audio file: {str(e)}")

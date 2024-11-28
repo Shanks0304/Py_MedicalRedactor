@@ -66,12 +66,41 @@ def find_ffmpeg_tools():
 # Get ffmpeg and ffprobe paths
 ffmpeg_path, ffprobe_path = find_ffmpeg_tools()
 
+
+def find_portaudio():
+    common_paths = [
+        '/opt/homebrew/lib/libportaudio.2.dylib',
+        '/usr/local/lib/libportaudio.2.dylib',
+        '/usr/lib/libportaudio.2.dylib'
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            print(f"Found portaudio at: {path}")
+            return path
+            
+    # Try to find in Homebrew Cellar as fallback
+    cellar_path = '/opt/homebrew/Cellar/portaudio/'
+    if os.path.exists(cellar_path):
+        versions = os.listdir(cellar_path)
+        if versions:
+            latest = sorted(versions)[-1]
+            lib_path = os.path.join(cellar_path, latest, 'lib', 'libportaudio.2.dylib')
+            if os.path.exists(lib_path):
+                print(f"Found portaudio in Homebrew cellar: {lib_path}")
+                return lib_path
+                
+    raise Exception("libportaudio.2.dylib not found. Please ensure portaudio is installed.")
+
+portaudio_path = find_portaudio()
+
 a = Analysis(
     ['src/main.py'],
     pathex=[os.path.abspath(os.getcwd())],
     binaries=[
         (ffmpeg_path, '.'),
         (ffprobe_path, '.'),
+        (portaudio_path, '.'),
     ],
     datas=[
         ('.env', '.'),  # Include .env file
@@ -95,6 +124,8 @@ a = Analysis(
         'pyaudio',
         'numpy',
         'pydub',
+        '_portaudio',
+        'audioop',
         'soundfile',
         'whisper',
         'docx',
@@ -103,10 +134,18 @@ a = Analysis(
         'langchain_ollama',
         'pydantic',
         'pydantic.deprecated.decorator',
+        'multiprocessing',
+        'multiprocessing.pool',
+        'multiprocessing.managers',
+        'multiprocessing.connection',
+        'multiprocessing.context',
+        'torch',
+        'torch._utils',
+        'torch.nn',
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['src/runtime_hook.py'],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -158,12 +197,18 @@ app = BUNDLE(
         'CFBundleVersion': '1.0.0',
         'NSHighResolutionCapable': 'True',
         'LSMinimumSystemVersion': '10.13.0',
-        'CFBundleExecutable': 'Medical Notes Redactor',  # Add this
-        'CFBundlePackageType': 'APPL',                  # Add this
+        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': '1.0.0',
+        'NSHighResolutionCapable': 'True',
+        'LSMinimumSystemVersion': '10.13.0',
+        'CFBundleExecutable': 'Medical Notes Redactor',
+        'CFBundlePackageType': 'APPL',
         'CFBundleName': 'Medical Notes Redactor',
-        # Add these environment variables
+        'NSMicrophoneUsageDescription': 'This app needs access to the microphone for audio recording.',
         'LSEnvironment': {
-            'PATH': '@executable_path:@executable_path/../Resources:${PATH}'
+            'PATH': '@executable_path:@executable_path/../Resources:${PATH}',
+            'PYTHONPATH': '@executable_path/../Resources',
+            'KMP_DUPLICATE_LIB_OK': 'TRUE'
         }
     }
 )

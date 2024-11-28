@@ -34,8 +34,4 @@ class MainWindow(QMainWindow):
         self.setup_window_properties()
         
     def setup_window_properties(self):
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: white;
-            }
-        """)
+        pass
