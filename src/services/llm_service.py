@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import sys
 from docx import Document
@@ -75,24 +76,31 @@ class LLMService(QObject):
 
     def __init__(self):
         super().__init__()
-
-        # Add this to prevent multiprocessing issues
-        if hasattr(multiprocessing, 'set_start_method'):
-            try:
-                multiprocessing.set_start_method('spawn', force=True)
-            except RuntimeError:
-                pass
-
+        
+        self.logger = setup_logger(__name__)
+        
         if getattr(sys, 'frozen', False):
-        # If running from bundle
-            bundle_dir = os.path.dirname(sys.executable)
-            resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
-            dotenv_path = os.path.join(resources_dir, '.env')
+            # If running from bundle
+            if platform.system() == 'Darwin':  # macOS
+                bundle_dir = os.path.dirname(sys.executable)
+                resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
+                dotenv_path = os.path.join(resources_dir, '.env')
+            else:  # Windows
+                bundle_dir = os.path.dirname(sys.executable)
+                dotenv_path = os.path.join(bundle_dir, '_internal', '.env')
+                
+            self.logger.info(f"Running as bundled app on {platform.system()}")
+            self.logger.info(f"Loading .env from: {dotenv_path}")
         else:
             # If running from source
             dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+            
+        # Load environment variables
+        if os.path.exists(dotenv_path):
+            load_dotenv(dotenv_path)
+        else:
+            raise Exception(f".env file not found at {dotenv_path}")
         
-        self.logger = setup_logger(__name__)
 
         self.logger.info(f"Loading .env from: {dotenv_path}")
         self.logger.info(f"Exists: {os.path.exists(dotenv_path)}")
@@ -100,6 +108,7 @@ class LLMService(QObject):
 
         self.output_dir = os.path.join(os.path.expanduser('~/Documents'), 'medicalapp', 'llm_outputs')
         os.makedirs(self.output_dir, exist_ok=True)
+        
         self.template_doc = None
         self.template_structure = None
         self.current_response_doc = None
@@ -146,15 +155,7 @@ class LLMService(QObject):
                 
                 # Force garbage collection
                 import gc
-                gc.collect()
-                
-                # Clean up any remaining semaphores
-                try:
-                    from multiprocessing import resource_tracker
-                    resource_tracker._resource_tracker = None
-                except Exception as e:
-                    self.logger.error(f"Resource cleanup warning: {e}")
-                    
+                gc.collect()                    
                 self.logger.debug("LLM unloaded successfully")
                 self.debug_message.emit("LLM unloaded successfully")
             except Exception as e:
@@ -214,18 +215,17 @@ class LLMService(QObject):
                 try:
                     rewritten_json = self.llm.invoke(
                         f"""
-                    The following JSON string has formatting errors:
+                    The following JSON string has formatting errors when json.loads() is called:
                     {json_string}
 
                     Error: {str(e)}
 
                     Please fix the JSON formatting issues following these rules:
-                    1. All string values must be enclosed in double quotes
-                    2. All keys must be enclosed in double quotes
-                    3. No trailing commas
-                    4. No single quotes for strings
-                    5. Boolean values should be lowercase (true/false)
-                    6. Null values should be lowercase
+                    1. All keys must be enclosed in double quotes
+                    2. No trailing commas
+                    3. No single quotes for strings
+                    4. Boolean values should be lowercase (true/false)
+                    5. Null values should be lowercase
                     
                     Output only the corrected JSON object with no additional text or explanations.
                     """)
@@ -396,8 +396,6 @@ class LLMService(QObject):
         Make sure to return ONLY an instance of the JSON, NOT the schema itself. Do not add any additional information.
         JSON schema:
         {{ HIPAA compliance data as key: substring of transcription, not additional formating.}}
-
-        For example, if the patient says their birth date is "January 7, 1999", use that exact string in the JSON, don't convert it to any other format.
 
         Task: {task}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
         """

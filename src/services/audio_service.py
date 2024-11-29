@@ -8,6 +8,7 @@ from datetime import datetime
 from pydub import AudioSegment
 import wave
 from utils.config import setup_logger
+import platform
 
 class AudioService(QObject):
     audio_data_ready = pyqtSignal(np.ndarray)
@@ -23,16 +24,22 @@ class AudioService(QObject):
 
         # Add this near the start of your __init__
         if getattr(sys, 'frozen', False):
-            # If running as bundled app
-            bundle_dir = os.path.dirname(sys.executable)
-            resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
-            self.ffmpeg_path = os.path.join(resources_dir, 'ffmpeg')
-            self.ffprobe_path = os.path.join(resources_dir, 'ffprobe')
-           
-            
-            # Make the binaries executable
-            os.chmod(self.ffmpeg_path, 0o755)
-            os.chmod(self.ffprobe_path, 0o755)
+             # Get base directory for the bundled app
+            if platform.system() == 'Darwin':  # macOS
+                bundle_dir = os.path.dirname(sys.executable)
+                resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
+                self.ffmpeg_path = os.path.join(resources_dir, 'ffmpeg')
+                self.ffprobe_path = os.path.join(resources_dir, 'ffprobe')
+                
+                # Make the binaries executable on macOS
+                os.chmod(self.ffmpeg_path, 0o755)
+                os.chmod(self.ffprobe_path, 0o755)
+                
+            else:  # Windows
+                bundle_dir = os.path.dirname(sys.executable)
+                resources_dir = os.path.join(bundle_dir, '_internal')
+                self.ffmpeg_path = os.path.join(resources_dir, 'ffmpeg.exe')
+                self.ffprobe_path = os.path.join(resources_dir, 'ffprobe.exe')
             
             # Set environment variables for both ffmpeg and ffprobe
             os.environ['PATH'] = f"{resources_dir}{os.pathsep}{os.environ.get('PATH', '')}"
@@ -52,10 +59,12 @@ class AudioService(QObject):
                 raise Exception(f"ffprobe not found at {self.ffprobe_path}")
         
         else:
-            # Development environment
-            self.ffmpeg_path = 'ffmpeg'  # Use system ffmpeg
-            self.ffprobe_path = 'ffprobe'  # Use system ffmpeg
-            self.logger.info("Running in development mode")
+            # Development environment - use system ffmpeg
+            self.ffmpeg_path = 'ffmpeg'
+            self.ffprobe_path = 'ffprobe'
+            if platform.system() == 'Windows':
+                self.ffmpeg_path += '.exe'
+                self.ffprobe_path += '.exe'
 
 
         self.recording = False

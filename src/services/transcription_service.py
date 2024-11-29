@@ -1,6 +1,7 @@
 from datetime import datetime
 import os
 from pathlib import Path
+import platform
 import sys
 import time
 import numpy as np
@@ -19,11 +20,6 @@ class TranscriptionWorker(QThread):
         self.audio_data = audio_data
         self.SAMPLE_RATE = 16000
         self.is_running = True
-        
-        # Configure torch for optimal performance
-        import torch
-        if hasattr(torch.backends, 'cuda'):
-            torch.backends.cuda.enabled = False
 
         self.logger = setup_logger(__name__)
     
@@ -113,18 +109,6 @@ class TranscriptionService(QObject):
     
     def __init__(self, model_size="small"):
         super().__init__()
-
-        # Initialize multiprocessing resources at startup
-        import multiprocessing
-        if sys.platform == 'darwin':
-            multiprocessing.set_start_method('fork', force=True)
-            os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
-        
-        # Pre-initialize torch settings
-        import torch
-        torch.set_num_threads(1)
-        if hasattr(torch.backends, 'cuda'):
-            torch.backends.cuda.enabled = False
         
         self.model = None
         self.model_size = model_size
@@ -145,21 +129,29 @@ class TranscriptionService(QObject):
         self.logger.info("Loading Whisper model...")
         self.progress_message.emit("Loading Whisper model...")
 
-        try:
-            import whisper
-            import torch
-            
-            # Configure torch
-            torch.set_num_threads(1)
-            torch.set_num_interop_threads(1)
-            
+        try:           
             if getattr(sys, 'frozen', False):
-                bundle_dir = os.path.dirname(sys.executable)
-                resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
-                model_path = os.path.join(resources_dir, 'resources', 'models')
+                # If running from bundle
+                if platform.system() == 'Darwin':  # macOS
+                    bundle_dir = os.path.dirname(sys.executable)
+                    resources_dir = os.path.join(os.path.dirname(bundle_dir), 'Resources')
+                    model_path = os.path.join(resources_dir, 'resources', 'models')
+                else:  # Windows
+                    bundle_dir = os.path.dirname(sys.executable)
+                    resources_dir = os.path.join(bundle_dir, '_internal')
+                    model_path = os.path.join(resources_dir, 'resources', 'models')
+            
+                self.logger.info(f"Running as bundled app on {platform.system()}")
+                self.logger.info(f"Loading models from: {model_path}")
             else:
+                # If running from source
                 model_path = os.path.join(os.path.dirname(__file__), '..', '..', 'resources', 'models')
-
+                    
+            # Verify the model directory exists
+            if not os.path.exists(model_path):
+                raise Exception(f"Models directory not found at {model_path}")
+            
+            import whisper
             self.model = whisper.load_model(
                 name=self.model_size,
                 download_root=model_path,
@@ -304,14 +296,7 @@ class TranscriptionService(QObject):
                         worker.terminate()
                 worker.deleteLater()
                 self.workers.remove(worker)
-            
-            # Clean up multiprocessing resources
-            try:
-                from multiprocessing import resource_tracker
-                resource_tracker._resource_tracker = None  # Reset the resource tracker
-            except:
-                pass
-            
+                       
             # If this was the last worker and we're not streaming, unload the model
             if not self.workers and not self.is_processing:
                 self.logger.debug("No active workers, unloading model...")
