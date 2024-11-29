@@ -190,77 +190,103 @@ class LLMService(QObject):
                 raise ValueError("No template loaded")
 
             self._load_llm()
-            
-            prompt = self.create_privacy_check_prompt(transcription=transcription)
-            self.logger.info("Prompt: " + "\n" + prompt)
-            privacy_result = self.llm.invoke(prompt)
-            self.logger.info("\n" + privacy_result)
-            self._unload_llm()
-            
             updated_transcription = transcription
-            
-           # Step 1: Find the index of the last closing brace
+
+            prompt = self.create_privacy_check_prompt(transcription=transcription)
+            privacy_result = self.llm.invoke(prompt)
+            self.logger.info("\n" + privacy_result)          
+            # Step 1: Find the index of the last closing brace
             end_index = privacy_result.rfind('}') + 1
             # Step 2: Find the index of the first opening brace
-            start_index = privacy_result.rfind('{')  # Search only before the last '}'
+            start_index = privacy_result.find('{')  # Search only before the last '}'
 
             # Step 2: Extract the JSON string  
             json_string = privacy_result[start_index:end_index]  
-            self.logger.info("privacy result: ", json_string)
+            self.logger.info(f"privacy result: {json_string}")
 
             # Step 3: Parse the JSON string into a Python dictionary  
             try:  
-                patient_data = json.loads(json_string)  
+                patient_data = json.loads(json_string)
+                self.logger.info(f"patient data: {patient_data}")
+                self._unload_llm()
             except json.JSONDecodeError as e:  
-                self.logger.error("Error decoding JSON:", e)
-                self.error_occurred.emit(str(e) + '\n\nPlease try again.')
-                return None
+                self.logger.error(f"Error decoding JSON: {str(e)}")
+                try:
+                    rewritten_json = self.llm.invoke(
+                        f"""
+                    The following JSON string has formatting errors:
+                    {json_string}
 
+                    Error: {str(e)}
+
+                    Please fix the JSON formatting issues following these rules:
+                    1. All string values must be enclosed in double quotes
+                    2. All keys must be enclosed in double quotes
+                    3. No trailing commas
+                    4. No single quotes for strings
+                    5. Boolean values should be lowercase (true/false)
+                    6. Null values should be lowercase
+                    
+                    Output only the corrected JSON object with no additional text or explanations.
+                    """)
+                    
+                    self.logger.info(f"New JSON object: {rewritten_json}")
+                    patient_data = json.loads(rewritten_json)
+                    self._unload_llm()
+                except (json.JSONDecodeError, Exception) as retry_error:
+                    self.logger.error(f"Failed to fix JSON: {str(retry_error)}")
+                    self.error_occurred.emit("Failed to process the response. Please try again.")
+                    self._unload_llm()
+                    return None
+
+            mentioned_json = {}
             for key, value in patient_data.items():
                 # Create a regex pattern to match the exact value in the response text
-                value = str(value)
-                if value != "" and value != None:
-                    if isinstance(value, str):  # Only replace string values
-                        pattern = re.escape(value)  # Escape special characters in the value
+                if value != "" and value != None and (isinstance(value, (str, int))):
+                    value = str(value)
+                    mentioned_json[key] = value
+                    pattern = re.escape(value)  # Escape special characters in the value
                     updated_transcription = re.sub(pattern, f'{{{key}}}', updated_transcription)
 
             self.logger.info(updated_transcription)
 
+            placeholders = ', '.join(f'{{{key}}}' for key in mentioned_json.keys())
             sample_note = '\n'.join([paragraph.text for paragraph in self.template_doc.paragraphs])
             import openai
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
-                # messages=[
-                #     {"role": "system", "content": "You are a bot that rewrites medical consultation notes using provided interview transcripts, ensuring the use of {name}, {age}, {date_of_birth}, {email}, {phone_number}."},
-                #     {"role": "user", "content":
-                #         f"""
-                #         Here is the original consultation note template:
-                #         {sample_note}
+            #     # messages=[
+            #     #     {"role": "system", "content": "You are a bot that rewrites medical consultation notes using provided interview transcripts, ensuring the use of {name}, {age}, {date_of_birth}, {email}, {phone_number}."},
+            #     #     {"role": "user", "content":
+            #     #         f"""
+            #     #         Here is the original consultation note template:
+            #     #         {sample_note}
 
-                #         Please rewrite this consultation note using the following interview transcription:
-                #         {updated_transcription}"""
-                #         + """
-                #         Important:
+            #     #         Please rewrite this consultation note using the following interview transcription:
+            #     #         {updated_transcription}"""
+            #     #         + """
+            #     #         Important:
 
-                #         Find all the available and possible patient's name, age, email, phone number and date of birth.
+            #     #         Find all the available and possible patient's name, age, email, phone number and date of birth.
 
-                #         Replace them with {name}, {age}, {date_of_birth}, {email}, {phone_number} on new note.
+            #     #         Replace them with {name}, {age}, {date_of_birth}, {email}, {phone_number} on new note.
 
-                #         Don't use any additional or creative labels except for {name}, {age}, {date_of_birth}, {email}, {phone_number}.
+            #     #         Don't use any additional or creative labels except for {name}, {age}, {date_of_birth}, {email}, {phone_number}.
 
-                #         Do not retain any previous PII from the sample note.
+            #     #         Do not retain any previous PII from the sample note.
 
-                #         Retain the original structure of the consultation note and do not include any explanations, comments, or additional text.
-                #         """
-                #     }
-                # ]
+            #     #         Retain the original structure of the consultation note and do not include any explanations, comments, or additional text.
+            #     #         """
+            #     #     }
+            #     # ]
                 messages = [
                     {
                         "role": "system", "content":
                             """You are a professional medical documentation assistant specializing in rewriting consultation notes.
                             Your role is to synthesize clinical interview transcripts into polished, human-like consultation notes that are comprehensive, detailed, and empathetic while adhering to a professional structure.
-                            Ensure that sensitive information like patient names, ages, and contact details are replaced with placeholders: {name}, {age}, {date_of_birth}, {email}, {phone_number}.
+                            Ensure that sensitive information like HIPAA compliance identifying data are replaced with brackets like {name}, {age}, {date_of_birth}.
                             Your notes should accurately reflect the patient’s symptoms, history, and context in a nuanced and relatable manner.
+                            Only return the same structured rewritten consultation notes without any additional information, style and formatting.
                             """
                     },
                     {
@@ -269,12 +295,16 @@ class LLMService(QObject):
                         Here is the original consultation note template:
                         {sample_note}
 
-
-
                         Please rewrite this consultation note using the following interview transcription:
-                        {updated_transcription}""" + 
+                        {updated_transcription}
 
+                        These are placeholders that should be used on generated document: {placeholders}
+                        Use only these placeholders.
+                        
+                        Only return the same structured rewritten consultation notes without any additional information, style and formatting.
+                        """ + 
 
+                        
                         """
                         Important:
                         1. Retain the structure of the provided consultation note template, including all sections and subheadings.
@@ -348,13 +378,14 @@ class LLMService(QObject):
 
     def create_privacy_check_prompt(self, transcription: str) -> str:
 
-        System_prompt = """You are a bot that ONLY responds with an instance of JSON without any additional information. You have access to a JSON schema, which will determine how the JSON should be structured."""
-            
-        schema = json.dumps(PrivacyCheck.model_json_schema())
+        System_prompt = """You are a bot that ONLY responds with an instance of JSON without any additional information.
+        hen extracting date-related information, use the EXACT substring from the original text without any formatting or conversion."""
 
-        task = f"""Extract the patient's personal identifiable information (PII): name, email, phone_number, age and date of birth from the following conversation transcription.
-        
-        {transcription}"""
+        task = f"""Extract the HIPAA compliance data of patient from the following interview between doctor and patient as JSON except patient's medical history and substance uses.
+        Among HIPAA compliance data, you must extract the patient's identifying data as JSON, except patient's medical history, substance_use.
+        For any dates (like date_of_birth), use the EXACT text as it appears in the transcription (e.g., if someone says "January 7, 1999", use that exact string).
+        {transcription}
+        """
 
         privacy_check_prompt = f"""
         <|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -364,20 +395,24 @@ class LLMService(QObject):
         <|start_header_id|>user<|end_header_id|>
         Make sure to return ONLY an instance of the JSON, NOT the schema itself. Do not add any additional information.
         JSON schema:
-        {schema}
+        {{ HIPAA compliance data as key: substring of transcription, not additional formating.}}
+
+        For example, if the patient says their birth date is "January 7, 1999", use that exact string in the JSON, don't convert it to any other format.
 
         Task: {task}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-            """
+        """
         return privacy_check_prompt
     
     def replace_pii_with_labels(self, text: str, replacements: dict) -> str:
-        # Convert all values to strings  
-        replacements = {key: str(value) for key, value in replacements.items()}  
+        # Convert all keys to lowercase and values to strings
+        replacements = {key.lower(): str(value) for key, value in replacements.items()}
+        
         # This regex finds text in curly braces
         pattern = r'\{(.*?)\}'
+        
         def replacement_function(match):
-            # Get the label without the braces
-            key = match.group(1)
+            # Get the label without the braces and convert to lowercase
+            key = match.group(1).lower()
             # Return the corresponding value, or the original key if not found
             return replacements.get(key, match.group(0))
         
