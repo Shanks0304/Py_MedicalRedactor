@@ -6,68 +6,14 @@ import platform
 import re
 import sys
 from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from PyQt6.QtCore import QObject, pyqtSignal
 from dotenv import load_dotenv
-from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
-from langchain_ollama import OllamaLLM
 from pydantic import BaseModel
 import multiprocessing
 
 from utils.config import setup_logger
 
 load_dotenv()
-
-# def load_env():
-#     if getattr(sys, 'frozen', False):
-#         # Get key and decrypt env file
-#         key = [s[0] for s in sys._MEIPASS if s[2] == 'OPTION'][0]
-#         f = Fernet(key)
-        
-#         env_path = os.path.join(sys._MEIPASS, 'encrypted.env')
-#         with open(env_path, 'rb') as file:
-#             encrypted_data = file.read()
-            
-#         decrypted_data = f.decrypt(encrypted_data)
-#         # Load decrypted env data
-#         for line in decrypted_data.decode().split('\n'):
-#             if '=' in line:
-#                 key, value = line.split('=', 1)
-#                 os.environ[key.strip()] = value.strip()
-
-
-# Instead of including .env directly, you can encrypt sensitive data
-# import base64
-# import os
-# from cryptography.fernet import Fernet
-
-# def encrypt_env():
-#     key = Fernet.generate_key()
-#     f = Fernet(key)
-    
-#     with open('.env', 'rb') as file:
-#         env_data = file.read()
-    
-#     encrypted_data = f.encrypt(env_data)
-    
-#     with open('encrypted.env', 'wb') as file:
-#         file.write(encrypted_data)
-    
-#     return key
-
-# key = encrypt_env()
-
-# a = Analysis(
-#     ['src/main.py'],
-#     datas=[
-#         ('encrypted.env', '.'),  # Include encrypted env instead
-#     ],
-#     # ... rest of your config
-# )
-
-# # Add key to binary
-# a.scripts += [(key, '', 'OPTION')]
 
 class LLMService(QObject):
     response_ready = pyqtSignal(str)
@@ -117,50 +63,6 @@ class LLMService(QObject):
         
         load_dotenv(dotenv_path)
 
-    def _load_llm(self):
-        # Initialize Llama model
-        if self.llm is None:
-            try:
-                self.debug_message.emit("Loading LLM model...")
-                callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
-                self.llm = OllamaLLM(
-                    model="llama3.2:1b",
-                    temperature=0.0,
-                    repeat_penalty=1.2,
-                    top_k=5,
-                    num_gpu=0,
-                    num_ctx=4098,
-                    verbose=True
-                )
-                self.debug_message.emit("LLM initialization successful")
-                self.logger.info("LLM initialization successful")
-                
-            except Exception as e:
-                error_msg = f"Error initializing Llama model: {str(e)}"
-                self.logger.error(error_msg)  # Debug print
-                self.error_occurred.emit(error_msg)
-                raise RuntimeError(error_msg)
-
-    def _unload_llm(self):
-        """Safely unload LLM model and clean up resources"""
-        if self.llm is not None:
-            try:
-                self.debug_message.emit("Unloading LLM ...")
-                self.logger.debug("Unloading LLM ...")
-                # Explicitly close any open resources
-                if hasattr(self.llm, 'client'):
-                    self.llm.client.close()
-                del self.llm
-                self.llm = None
-                
-                # Force garbage collection
-                import gc
-                gc.collect()                    
-                self.logger.debug("LLM unloaded successfully")
-                self.debug_message.emit("LLM unloaded successfully")
-            except Exception as e:
-                self.logger.error(f"Error during model cleanup: {e}")
-
     def set_template(self, template_path: str):
         """Load and analyze the template document"""
         try:
@@ -190,68 +92,56 @@ class LLMService(QObject):
             if not self.template_doc:
                 raise ValueError("No template loaded")
 
-            self._load_llm()
+            from presidio_analyzer import AnalyzerEngine
+            analyzer = AnalyzerEngine()
+            analyzer_results = analyzer.analyze(text=transcription, language='en')
+
+            entity_counters = {}
+            replacements = []
+            patient_data = []
+
+            self.logger.info("Identified these PII entities:")
+            for result in analyzer_results:
+                if result.score > 0.5:
+                    # Initialize counter for new entity types
+                    if result.entity_type not in entity_counters:
+                        entity_counters[result.entity_type] = 1
+                    
+                    # Create replacement with indexed entity type
+                    replacement = {
+                        'start': result.start,
+                        'end': result.end,
+                        'original': transcription[result.start:result.end],
+                        'replacement': f"{{{result.entity_type}_{entity_counters[result.entity_type]}}}"
+                    }
+                    replacements.append(replacement)
+                    
+                    # Increment counter for this entity type
+                    entity_counters[result.entity_type] += 1
+
+                    self.logger.info(f"- {transcription[result.start:result.end]} as {result.entity_type}")
+                    patient_data.append({f"{{{result.entity_type}_{entity_counters[result.entity_type]}}}": transcription[result.start:result.end]})
+
+            self.logger.info(f"Patient data: {patient_data}")
+            # Apply replacements from end to start to avoid index shifting
             updated_transcription = transcription
+            for replacement in sorted(replacements, key=lambda x: x['start'], reverse=True):
+                updated_transcription = (
+                    updated_transcription[:replacement['start']] + 
+                    replacement['replacement'] + 
+                    updated_transcription[replacement['end']:]
+                )
 
-            prompt = self.create_privacy_check_prompt(transcription=transcription)
-            privacy_result = self.llm.invoke(prompt)
-            self.logger.info("\n" + privacy_result)          
-            # Step 1: Find the index of the last closing brace
-            end_index = privacy_result.rfind('}') + 1
-            # Step 2: Find the index of the first opening brace
-            start_index = privacy_result.find('{')  # Search only before the last '}'
+            print("Modified text:")
+            print(updated_transcription)
 
-            # Step 2: Extract the JSON string  
-            json_string = privacy_result[start_index:end_index]  
-            self.logger.info(f"privacy result: {json_string}")
-
-            # Step 3: Parse the JSON string into a Python dictionary  
-            try:  
-                patient_data = json.loads(json_string)
-                self.logger.info(f"patient data: {patient_data}")
-                self._unload_llm()
-            except json.JSONDecodeError as e:  
-                self.logger.error(f"Error decoding JSON: {str(e)}")
-                try:
-                    rewritten_json = self.llm.invoke(
-                        f"""
-                    The following JSON string has formatting errors when json.loads() is called:
-                    {json_string}
-
-                    Error: {str(e)}
-
-                    Please fix the JSON formatting issues following these rules:
-                    1. All keys must be enclosed in double quotes
-                    2. No trailing commas
-                    3. No single quotes for strings
-                    4. Boolean values should be lowercase (true/false)
-                    5. Null values should be lowercase
-                    
-                    Output only the corrected JSON object with no additional text or explanations.
-                    """)
-                    
-                    self.logger.info(f"New JSON object: {rewritten_json}")
-                    patient_data = json.loads(rewritten_json)
-                    self._unload_llm()
-                except (json.JSONDecodeError, Exception) as retry_error:
-                    self.logger.error(f"Failed to fix JSON: {str(retry_error)}")
-                    self.error_occurred.emit("Failed to process the response. Please try again.")
-                    self._unload_llm()
-                    return None
-
-            mentioned_json = {}
-            for key, value in patient_data.items():
-                # Create a regex pattern to match the exact value in the response text
-                if value != "" and value != None and (isinstance(value, (str, int))):
-                    value = str(value)
-                    mentioned_json[key] = value
-                    pattern = re.escape(value)  # Escape special characters in the value
-                    updated_transcription = re.sub(pattern, f'{{{key}}}', updated_transcription)
-
-            self.logger.info(updated_transcription)
-
-            placeholders = ', '.join(f'{{{key}}}' for key in mentioned_json.keys())
             sample_note = '\n'.join([paragraph.text for paragraph in self.template_doc.paragraphs])
+
+            # Get list of placeholder keys from patient_data
+            placeholders = []
+            for data_dict in patient_data:
+                placeholders.extend(list(data_dict.keys()))
+
             import openai
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
@@ -335,8 +225,6 @@ class LLMService(QObject):
         except Exception as e:
             self.error_occurred.emit(str(e))
             return None
-        finally:
-            self._unload_llm()
 
     def save_response(self, response_context: str) -> str:
         """
@@ -375,54 +263,24 @@ class LLMService(QObject):
             self.logger.error(error_msg)  # Debug print
             self.error_occurred.emit(error_msg)
             return None
-
-    def create_privacy_check_prompt(self, transcription: str) -> str:
-
-        System_prompt = """You are a bot that ONLY responds with an instance of JSON without any additional information.
-        hen extracting date-related information, use the EXACT substring from the original text without any formatting or conversion."""
-
-        task = f"""Extract the HIPAA compliance data of patient from the following interview between doctor and patient as JSON except patient's medical history and substance uses.
-        Among HIPAA compliance data, you must extract the patient's identifying data as JSON, except patient's medical history, substance_use.
-        For any dates (like date_of_birth), use the EXACT text as it appears in the transcription (e.g., if someone says "January 7, 1999", use that exact string).
-        {transcription}
-        """
-
-        privacy_check_prompt = f"""
-        <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-        {System_prompt}<|eot_id|>
-
-        <|start_header_id|>user<|end_header_id|>
-        Make sure to return ONLY an instance of the JSON, NOT the schema itself. Do not add any additional information.
-        JSON schema:
-        {{ HIPAA compliance data as key: substring of transcription, not additional formating.}}
-
-        Task: {task}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-        """
-        return privacy_check_prompt
     
-    def replace_pii_with_labels(self, text: str, replacements: dict) -> str:
+    def replace_pii_with_labels(self, text: str, replacements: list) -> str:
+        # Merge all dictionaries in the list into a single dictionary
+        merged_replacements = {}
+        for d in replacements:
+            merged_replacements.update(d)
+        
+        
         # Convert all keys to lowercase and values to strings
-        replacements = {key.lower(): str(value) for key, value in replacements.items()}
+        merged_replacements = {key: str(value) for key, value in merged_replacements.items()}
+        self.logger.info(f"Merged replacements: {merged_replacements}")
         
         # This regex finds text in curly braces
-        pattern = r'\{(.*?)\}'
+        pattern = r'\{[A-Z_0-9]+\}'
         
-        def replacement_function(match):
-            # Get the label without the braces and convert to lowercase
-            key = match.group(1).lower()
-            # Return the corresponding value, or the original key if not found
-            return replacements.get(key, match.group(0))
+        # Replace each occurrence with its corresponding value
+        result = text
+        for key, value in merged_replacements.items():
+            result = result.replace(key, value)
         
-        # Use re.sub with the replacement_function to replace all patterns
-        return re.sub(pattern, replacement_function, text)
-
-    def __del__(self):
-        """Destructor to ensure cleanup"""
-        self._unload_llm()
-class PrivacyCheck(BaseModel):
-    name: str
-    email: str
-    phone_number: str
-    age: int
-    date_of_birth: str
+        return result

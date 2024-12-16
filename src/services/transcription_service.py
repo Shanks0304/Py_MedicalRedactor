@@ -26,7 +26,6 @@ class TranscriptionWorker(QThread):
     def stop(self):
         self.is_running = False
         self.wait()
-        self.deleteLater()
     
     # def _save_audio_chunk(self, audio_data: np.ndarray):
     #     try:
@@ -61,8 +60,7 @@ class TranscriptionWorker(QThread):
                 audio_float32 = np.array(self.audio_data, dtype=np.float32)
                 result = self.model.transcribe(
                     audio_float32,
-                    language='en',
-                    fp16=False
+                    language='en'
                 )  # Specify language if needed
 
                 self.logger.info(f"Whisper transcription took {time.time() - start_time} seconds")
@@ -201,11 +199,10 @@ class TranscriptionService(QObject):
             self._process_final_buffer()
 
             # Clean up workers
-            for worker in self.workers[:]:
+            for worker in self.workers:
                 try:
                     if worker.isRunning():
                         worker.stop()
-                        worker.wait()
                     worker.deleteLater()
                     self.workers.remove(worker)
                 except Exception as e:
@@ -291,9 +288,6 @@ class TranscriptionService(QObject):
             if worker in self.workers:
                 if worker.isRunning():
                     worker.stop()
-                    worker.wait(2000)  # Wait for thread to finish
-                    if worker.isRunning():
-                        worker.terminate()
                 worker.deleteLater()
                 self.workers.remove(worker)
                        
@@ -313,7 +307,6 @@ class TranscriptionService(QObject):
                 try:
                     if worker.isRunning():
                         worker.stop()
-                        worker.wait()
                     worker.deleteLater()
                 except:
                     pass
