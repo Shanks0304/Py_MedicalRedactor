@@ -11,10 +11,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal
 from services.llm_service import LLMService
-from docx import Document
-from docx.shared import Pt
-import tempfile
-import os
 
 
 class LLMPanel(QWidget):
